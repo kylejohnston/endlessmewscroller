@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Endless Cat Scroller</title>
+  <style>
+    /* ===== GLOBAL STYLES ===== */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    /* ===== CONTAINER ===== */
+    #image-container {
+      max-width: 600px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* ===== IMAGE WRAPPER ===== */
+    .image-wrapper {
+      width: 100%;
+      background: white;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .image-wrapper.loaded {
+      opacity: 1;
+    }
+
+    .image-wrapper img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    /* ===== SENTINEL ===== */
+    #sentinel {
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* ===== HEADER ===== */
+    header {
+      text-align: center;
+      color: white;
+      margin-bottom: 40px;
+      max-width: 600px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+    }
+
+    .subtitle {
+      font-size: 1.1rem;
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🐱 Endless Cat Scroller</h1>
+    <p class="subtitle">Scroll down for infinite cats!</p>
+  </header>
+
+  <div id="image-container">
+    <!-- Cat images dynamically inserted here -->
+  </div>
+  <div id="sentinel"></div>
+
+  <script>
+    // ===== 1. CONFIGURATION & STATE =====
+    const CONFIG = {
+      INITIAL_BATCH_SIZE: 10,
+      BATCH_SIZE: 5,
+      SCROLL_THRESHOLD: '200px',
+      MAX_RETRIES: 3,
+      RETRY_DELAYS: [2000, 4000, 8000] // Exponential backoff in ms
+    };
+
+    const STATE = {
+      loadedImages: new Set(), // Track loaded image IDs to prevent duplicates
+      isLoading: false,
+      hasError: false,
+      isInitialLoad: true
+    };
+
+    // ===== 2. API SERVICE =====
+    /**
+     * Generic interface for fetching cat images
+     * Returns array of image objects: [{ url, id, width, height }, ...]
+     *
+     * To swap API providers, replace this function implementation
+     */
+    async function fetchCatImages(count = 5) {
+      // CATAAS.COM implementation
+      const images = [];
+
+      for (let i = 0; i < count; i++) {
+        // Each request gets a unique cat image
+        // Adding timestamp to ensure uniqueness
+        const timestamp = Date.now();
+        const random = Math.random().toString(36).substring(7);
+        const id = `${timestamp}-${random}-${i}`;
+
+        images.push({
+          url: `https://cataas.com/cat?${timestamp}-${i}`,
+          id: id,
+          width: 600,  // cataas returns variable sizes, we'll constrain with CSS
+          height: 400  // approximate
+        });
+      }
+
+      return images;
+    }
+
+    /**
+     * Fetch with retry logic and exponential backoff
+     */
+    async function fetchWithRetry(fetchFn, retries = 0) {
+      try {
+        return await fetchFn();
+      } catch (error) {
+        if (retries < CONFIG.MAX_RETRIES) {
+          const delay = CONFIG.RETRY_DELAYS[retries];
+          console.log(`Fetch failed, retrying in ${delay}ms... (attempt ${retries + 1}/${CONFIG.MAX_RETRIES})`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return fetchWithRetry(fetchFn, retries + 1);
+        } else {
+          console.error('Max retries reached, stopping fetch attempts');
+          STATE.hasError = true;
+          throw error;
+        }
+      }
+    }
+
+    // ===== 3. IMAGE MANAGER =====
+    /**
+     * Creates a DOM element for a cat image
+     */
+    function createImageElement(imageData) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'image-wrapper';
+
+      const img = document.createElement('img');
+      img.src = imageData.url;
+      img.alt = 'A cute cat';
+      img.loading = 'lazy'; // Native lazy loading
+
+      // Handle successful image load
+      img.addEventListener('load', () => {
+        wrapper.classList.add('loaded');
+      });
+
+      // Handle image load failure - silently remove
+      img.addEventListener('error', () => {
+        console.warn(`Failed to load image: ${imageData.id}`);
+        wrapper.remove();
+      });
+
+      wrapper.appendChild(img);
+      return wrapper;
+    }
+
+    /**
+     * Fetches and appends a batch of cat images
+     */
+    async function fetchNextBatch() {
+      if (STATE.isLoading || STATE.hasError) {
+        return;
+      }
+
+      STATE.isLoading = true;
+
+      try {
+        // Determine batch size based on initial load
+        const batchSize = STATE.isInitialLoad ? CONFIG.INITIAL_BATCH_SIZE : CONFIG.BATCH_SIZE;
+
+        // Fetch images with retry logic
+        const images = await fetchWithRetry(() => fetchCatImages(batchSize));
+
+        // Filter out any duplicates (though unlikely with our ID strategy)
+        const newImages = images.filter(img => {
+          if (STATE.loadedImages.has(img.id)) {
+            return false;
+          }
+          STATE.loadedImages.add(img.id);
+          return true;
+        });
+
+        // Create DOM elements using DocumentFragment for performance
+        const fragment = document.createDocumentFragment();
+        newImages.forEach(imageData => {
+          const element = createImageElement(imageData);
+          fragment.appendChild(element);
+        });
+
+        // Append all images at once
+        const container = document.getElementById('image-container');
+        container.appendChild(fragment);
+
+        // Mark initial load as complete
+        if (STATE.isInitialLoad) {
+          STATE.isInitialLoad = false;
+        }
+
+      } catch (error) {
+        console.error('Failed to fetch cat images:', error);
+        STATE.hasError = true;
+      } finally {
+        STATE.isLoading = false;
+      }
+    }
+
+    // ===== 4. SCROLL CONTROLLER & OBSERVER =====
+    /**
+     * Handles intersection events from the sentinel element
+     */
+    function handleIntersection(entries) {
+      entries.forEach(entry => {
+        // When sentinel enters viewport (within rootMargin), load more
+        if (entry.isIntersecting && !STATE.isLoading && !STATE.hasError) {
+          fetchNextBatch();
+        }
+      });
+    }
+
+    /**
+     * Initialize Intersection Observer
+     */
+    function initScrollObserver() {
+      const sentinel = document.getElementById('sentinel');
+
+      const observer = new IntersectionObserver(handleIntersection, {
+        root: null, // Use viewport as root
+        rootMargin: CONFIG.SCROLL_THRESHOLD, // Trigger 200px before sentinel is visible
+        threshold: 0 // Fire as soon as any part enters the extended viewport
+      });
+
+      observer.observe(sentinel);
+
+      return observer;
+    }
+
+    // ===== 5. INITIALIZATION =====
+    /**
+     * Initialize the application
+     */
+    async function init() {
+      // Start observing scroll position
+      initScrollObserver();
+
+      // Load initial batch immediately (before user scrolls)
+      await fetchNextBatch();
+    }
+
+    // Start the app when DOM is ready
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+  </script>
+</body>
+</html>
