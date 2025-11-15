@@ -553,7 +553,7 @@
             <div class="error-message">
               <h2>😿 Failed to load cats</h2>
               <p>All cat image providers appear to be unavailable.</p>
-              <pre>${error.message}\n\nCheck the browser console for details.</pre>
+              <pre>${error.message.replace(/</g, '&lt;').replace(/>/g, '&gt;')}\n\nCheck the browser console for details.</pre>
               <p style="margin-top: 15px;"><small>Try refreshing the page in a moment.</small></p>
             </div>
           `;
