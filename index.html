@@ -104,16 +104,6 @@
       opacity: 0.9;
     }
 
-    .api-badge {
-      display: inline-block;
-      background: rgba(0, 255, 0, 0.3);
-      padding: 4px 12px;
-      border-radius: 20px;
-      font-size: 0.75rem;
-      margin-top: 5px;
-      backdrop-filter: blur(10px);
-    }
-
     /* ===== LOADING MESSAGE ===== */
     .loading-message {
       text-align: center;
@@ -177,7 +167,6 @@
   <header>
     <h1>🐱 Endless Cat Scroller</h1>
     <p class="subtitle">Scroll down for infinite cats!</p>
-    <div class="api-badge" id="api-badge">Initializing...</div>
   </header>
 
   <div id="loading-container">
@@ -275,7 +264,6 @@
               this._log(`✓ ${provider.name} works!`, 'info');
               this.workingProvider = provider.fn;
               STATE.currentProvider = provider.name;
-              this._updateAPIBadge(provider.name);
               return images;
             }
           } catch (error) {
@@ -294,6 +282,11 @@
         const response = await fetch(`https://api.thecatapi.com/v1/images/search?limit=${count}`);
 
         if (!response.ok) {
+          if (response.status === 429) {
+            const error = new Error('Rate limit exceeded. Please try again later.');
+            error.isRateLimit = true;
+            throw error;
+          }
           throw new Error(`TheCatAPI returned ${response.status}`);
         }
 
@@ -408,14 +401,6 @@
         return wrapper;
       },
 
-      _updateAPIBadge(providerName) {
-        const badge = document.getElementById('api-badge');
-        if (badge) {
-          badge.textContent = `Using: ${providerName}`;
-          badge.style.background = 'rgba(0, 255, 0, 0.3)';
-        }
-      },
-
       _log(message, level = 'info') {
         if (CONFIG.DEV_MODE) {
           console[level](`[CatAPI] ${message}`);
@@ -483,6 +468,11 @@
       try {
         return await fetchFn();
       } catch (error) {
+        // Don't retry on rate limits - it won't help
+        if (error.isRateLimit) {
+          throw error;
+        }
+
         if (retries < CONFIG.MAX_RETRIES) {
           const delay = CONFIG.RETRY_DELAYS[retries];
           console.log(`Retry ${retries + 1}/${CONFIG.MAX_RETRIES} in ${delay}ms...`);
@@ -546,14 +536,29 @@
     function showError(error) {
       const loadingContainer = document.getElementById('loading-container');
       if (loadingContainer) {
-        loadingContainer.innerHTML = `
-          <div class="error-message">
-            <h2>😿 Failed to load cats</h2>
-            <p>All cat image providers appear to be unavailable.</p>
-            <pre>${error.message}\n\nCheck the browser console for details.</pre>
-            <p style="margin-top: 15px;"><small>Try refreshing the page in a moment.</small></p>
-          </div>
-        `;
+        // Check if this is a rate limit error
+        const isRateLimit = error.isRateLimit || error.message.toLowerCase().includes('rate limit');
+
+        if (isRateLimit) {
+          loadingContainer.innerHTML = `
+            <div class="error-message">
+              <h2>⏰ Rate Limit Reached</h2>
+              <p>You've hit the API rate limit for cat images.</p>
+              <p style="margin-top: 15px;">Please wait a bit and try again later.</p>
+              <p style="margin-top: 10px;"><small>Rate limits typically reset within an hour.</small></p>
+            </div>
+          `;
+        } else {
+          loadingContainer.innerHTML = `
+            <div class="error-message">
+              <h2>😿 Failed to load cats</h2>
+              <p>All cat image providers appear to be unavailable.</p>
+              <pre>${error.message}\n\nCheck the browser console for details.</pre>
+              <p style="margin-top: 15px;"><small>Try refreshing the page in a moment.</small></p>
+            </div>
+          `;
+        }
+
         loadingContainer.style.display = 'block';
       }
     }
