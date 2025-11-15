@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Endless Cat Scroller</title>
+  <title>Endless Cat Scroller v2</title>
   <style>
     /* ===== GLOBAL STYLES ===== */
     * {
@@ -37,6 +37,7 @@
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
       opacity: 0;
       transition: opacity 0.3s ease;
+      position: relative;
     }
 
     .image-wrapper.loaded {
@@ -47,6 +48,31 @@
       width: 100%;
       height: auto;
       display: block;
+    }
+
+    /* ===== TAG DISPLAY ===== */
+    .image-tags {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    .image-wrapper:hover .image-tags {
+      opacity: 1;
+    }
+
+    .tag {
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      backdrop-filter: blur(4px);
     }
 
     /* ===== SENTINEL ===== */
@@ -77,13 +103,89 @@
       font-size: 1.1rem;
       opacity: 0.9;
     }
+
+    .api-badge {
+      display: inline-block;
+      background: rgba(0, 255, 0, 0.3);
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      margin-top: 5px;
+      backdrop-filter: blur(10px);
+    }
+
+    /* ===== LOADING MESSAGE ===== */
+    .loading-message {
+      text-align: center;
+      color: white;
+      padding: 40px;
+      font-size: 1.2rem;
+      max-width: 600px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      backdrop-filter: blur(10px);
+    }
+
+    /* ===== ERROR MESSAGE ===== */
+    .error-message {
+      text-align: center;
+      color: white;
+      padding: 40px;
+      max-width: 600px;
+      margin: 0 auto;
+      background: rgba(255, 0, 0, 0.3);
+      border-radius: 12px;
+      backdrop-filter: blur(10px);
+    }
+
+    .error-message h2 {
+      margin-bottom: 15px;
+    }
+
+    .error-message pre {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 15px;
+      border-radius: 8px;
+      overflow-x: auto;
+      text-align: left;
+      font-size: 0.85rem;
+      margin-top: 15px;
+    }
+
+    /* ===== DEV MODE STATS ===== */
+    .stats {
+      position: fixed;
+      bottom: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 10px 15px;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      font-family: monospace;
+      z-index: 1000;
+      backdrop-filter: blur(10px);
+    }
+
+    .stats div {
+      margin: 2px 0;
+    }
   </style>
 </head>
 <body>
   <header>
     <h1>🐱 Endless Cat Scroller</h1>
     <p class="subtitle">Scroll down for infinite cats!</p>
+    <div class="api-badge" id="api-badge">Initializing...</div>
   </header>
+
+  <div id="loading-container">
+    <div class="loading-message">
+      🐱 Loading cats...<br>
+      <small>This may take a moment...</small>
+    </div>
+  </div>
 
   <div id="image-container">
     <!-- Cat images dynamically inserted here -->
@@ -93,190 +195,409 @@
   <script>
     // ===== 1. CONFIGURATION & STATE =====
     const CONFIG = {
-      INITIAL_BATCH_SIZE: 10,
       BATCH_SIZE: 5,
       SCROLL_THRESHOLD: '200px',
       MAX_RETRIES: 3,
-      RETRY_DELAYS: [2000, 4000, 8000] // Exponential backoff in ms
+      RETRY_DELAYS: [2000, 4000, 8000],
+      CLEANUP_THRESHOLD: 2000,
+      CACHE_SIZE: 20,
+      DEV_MODE: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:'
     };
+
+    const estimatedImagesPerViewport = Math.ceil(window.innerHeight / 400);
+    CONFIG.INITIAL_BATCH_SIZE = Math.max(estimatedImagesPerViewport * 2, 10);
 
     const STATE = {
-      loadedImages: new Set(), // Track loaded image IDs to prevent duplicates
+      loadedImageIds: new Set(),
       isLoading: false,
       hasError: false,
-      isInitialLoad: true
+      isInitialLoad: true,
+      totalLoaded: 0,
+      totalCleaned: 0,
+      cacheHits: 0,
+      apiCalls: 0,
+      currentProvider: null
     };
 
-    // ===== 2. API SERVICE =====
-    /**
-     * Generic interface for fetching cat images
-     * Returns array of image objects: [{ url, id, width, height }, ...]
-     *
-     * To swap API providers, replace this function implementation
-     */
-    async function fetchCatImages(count = 5) {
-      // CATAAS.COM implementation
-      const images = [];
+    // ===== 2. API SERVICE (MULTI-PROVIDER) =====
+    const CatAPI = {
+      cache: [],
+      workingProvider: null, // Will be set to whichever works first
 
-      for (let i = 0; i < count; i++) {
-        // Each request gets a unique cat image
-        // Adding timestamp to ensure uniqueness
-        const timestamp = Date.now();
-        const random = Math.random().toString(36).substring(7);
-        const id = `${timestamp}-${random}-${i}`;
+      /**
+       * Main fetch method - tries providers until one works
+       */
+      async fetch(count = 5) {
+        // Try cache first
+        if (this.cache.length >= count) {
+          const cached = this.cache.splice(0, count);
+          STATE.cacheHits += count;
+          this._log(`Served ${count} images from cache`);
 
-        images.push({
-          url: `https://cataas.com/cat?${timestamp}-${i}`,
-          id: id,
-          width: 600,  // cataas returns variable sizes, we'll constrain with CSS
-          height: 400  // approximate
+          if (this.cache.length < CONFIG.BATCH_SIZE) {
+            this._refillCache();
+          }
+
+          return cached;
+        }
+
+        // Cache miss - fetch from API
+        const images = await this._fetchFromAPI(count);
+        this._refillCache();
+        return images;
+      },
+
+      /**
+       * Try each provider until one works
+       */
+      async _fetchFromAPI(count) {
+        STATE.apiCalls++;
+
+        // If we found a working provider, use it
+        if (this.workingProvider) {
+          return await this.workingProvider(count);
+        }
+
+        // Try providers in order
+        const providers = [
+          { name: 'TheCatAPI', fn: this._fetchFromTheCatAPI.bind(this) },
+          { name: 'CATAAS (fallback)', fn: this._fetchFromCataasSimple.bind(this) }
+        ];
+
+        let lastError = null;
+
+        for (const provider of providers) {
+          try {
+            this._log(`Trying ${provider.name}...`);
+            const images = await provider.fn(count);
+
+            if (images && images.length > 0) {
+              this._log(`✓ ${provider.name} works!`, 'info');
+              this.workingProvider = provider.fn;
+              STATE.currentProvider = provider.name;
+              this._updateAPIBadge(provider.name);
+              return images;
+            }
+          } catch (error) {
+            this._log(`✗ ${provider.name} failed: ${error.message}`, 'warn');
+            lastError = error;
+          }
+        }
+
+        throw lastError || new Error('All providers failed');
+      },
+
+      /**
+       * TheCatAPI.com implementation (FREE, no key required for basic use)
+       */
+      async _fetchFromTheCatAPI(count) {
+        const response = await fetch(`https://api.thecatapi.com/v1/images/search?limit=${count}`);
+
+        if (!response.ok) {
+          throw new Error(`TheCatAPI returned ${response.status}`);
+        }
+
+        const cats = await response.json();
+
+        return cats.map(cat => ({
+          id: cat.id,
+          tags: [],
+          baseUrl: cat.url,
+          srcset: `${cat.url} 1x`,
+          sizes: '(max-width: 600px) 100vw, 600px',
+          url: cat.url
+        }));
+      },
+
+      /**
+       * CATAAS simple fallback (direct image URLs, no JSON API)
+       */
+      async _fetchFromCataasSimple(count) {
+        const images = [];
+
+        for (let i = 0; i < count; i++) {
+          const timestamp = Date.now();
+          const random = Math.random().toString(36).substring(7);
+          const id = `cataas-${timestamp}-${random}-${i}`;
+
+          images.push({
+            id: id,
+            tags: [],
+            baseUrl: `https://cataas.com/cat?${timestamp}-${i}`,
+            srcset: `https://cataas.com/cat?${timestamp}-${i} 1x`,
+            sizes: '(max-width: 600px) 100vw, 600px',
+            url: `https://cataas.com/cat?${timestamp}-${i}`
+          });
+        }
+
+        // Test if first image is accessible
+        try {
+          const testResponse = await fetch(images[0].url, { method: 'HEAD' });
+          if (!testResponse.ok) {
+            throw new Error('CATAAS images not accessible');
+          }
+        } catch (error) {
+          throw new Error('CATAAS service unavailable');
+        }
+
+        return images;
+      },
+
+      /**
+       * Refill cache in background
+       */
+      async _refillCache() {
+        if (this.cache.length >= CONFIG.CACHE_SIZE || !this.workingProvider) {
+          return;
+        }
+
+        try {
+          const needed = CONFIG.CACHE_SIZE - this.cache.length;
+          const images = await this.workingProvider(needed);
+          this.cache.push(...images);
+          this._log(`Cache refilled: ${this.cache.length} cached`);
+        } catch (error) {
+          console.error('Failed to refill cache:', error);
+        }
+      },
+
+      /**
+       * Build image element
+       */
+      buildImageElement(imageData) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'image-wrapper';
+        wrapper.dataset.imageId = imageData.id;
+
+        const img = document.createElement('img');
+        img.src = imageData.url;
+        if (imageData.srcset) {
+          img.srcset = imageData.srcset;
+        }
+        if (imageData.sizes) {
+          img.sizes = imageData.sizes;
+        }
+        img.alt = `Cat ${imageData.tags.length > 0 ? 'tagged: ' + imageData.tags.join(', ') : ''}`;
+        img.loading = 'lazy';
+
+        img.addEventListener('load', () => {
+          wrapper.classList.add('loaded');
         });
-      }
 
-      return images;
-    }
+        img.addEventListener('error', () => {
+          this._log(`Failed to load image: ${imageData.id}`, 'error');
+          wrapper.remove();
+        });
 
-    /**
-     * Fetch with retry logic and exponential backoff
-     */
-    async function fetchWithRetry(fetchFn, retries = 0) {
-      try {
-        return await fetchFn();
-      } catch (error) {
-        if (retries < CONFIG.MAX_RETRIES) {
-          const delay = CONFIG.RETRY_DELAYS[retries];
-          console.log(`Fetch failed, retrying in ${delay}ms... (attempt ${retries + 1}/${CONFIG.MAX_RETRIES})`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          return fetchWithRetry(fetchFn, retries + 1);
-        } else {
-          console.error('Max retries reached, stopping fetch attempts');
-          STATE.hasError = true;
-          throw error;
+        wrapper.appendChild(img);
+
+        if (imageData.tags && imageData.tags.length > 0) {
+          const tagsContainer = document.createElement('div');
+          tagsContainer.className = 'image-tags';
+
+          imageData.tags.slice(0, 3).forEach(tag => {
+            const tagEl = document.createElement('span');
+            tagEl.className = 'tag';
+            tagEl.textContent = tag;
+            tagsContainer.appendChild(tagEl);
+          });
+
+          wrapper.appendChild(tagsContainer);
+        }
+
+        return wrapper;
+      },
+
+      _updateAPIBadge(providerName) {
+        const badge = document.getElementById('api-badge');
+        if (badge) {
+          badge.textContent = `Using: ${providerName}`;
+          badge.style.background = 'rgba(0, 255, 0, 0.3)';
+        }
+      },
+
+      _log(message, level = 'info') {
+        if (CONFIG.DEV_MODE) {
+          console[level](`[CatAPI] ${message}`);
         }
       }
-    }
+    };
 
     // ===== 3. IMAGE MANAGER =====
-    /**
-     * Creates a DOM element for a cat image
-     */
-    function createImageElement(imageData) {
-      const wrapper = document.createElement('div');
-      wrapper.className = 'image-wrapper';
-
-      const img = document.createElement('img');
-      img.src = imageData.url;
-      img.alt = 'A cute cat';
-      img.loading = 'lazy'; // Native lazy loading
-
-      // Handle successful image load
-      img.addEventListener('load', () => {
-        wrapper.classList.add('loaded');
-      });
-
-      // Handle image load failure - silently remove
-      img.addEventListener('error', () => {
-        console.warn(`Failed to load image: ${imageData.id}`);
-        wrapper.remove();
-      });
-
-      wrapper.appendChild(img);
-      return wrapper;
-    }
-
-    /**
-     * Fetches and appends a batch of cat images
-     */
     async function fetchNextBatch() {
       if (STATE.isLoading || STATE.hasError) {
         return;
       }
 
       STATE.isLoading = true;
+      updateStats();
+
+      // Hide loading message on first batch
+      if (STATE.isInitialLoad) {
+        const loadingContainer = document.getElementById('loading-container');
+        if (loadingContainer) {
+          loadingContainer.style.display = 'none';
+        }
+      }
 
       try {
-        // Determine batch size based on initial load
         const batchSize = STATE.isInitialLoad ? CONFIG.INITIAL_BATCH_SIZE : CONFIG.BATCH_SIZE;
+        const images = await fetchWithRetry(() => CatAPI.fetch(batchSize));
 
-        // Fetch images with retry logic
-        const images = await fetchWithRetry(() => fetchCatImages(batchSize));
-
-        // Filter out any duplicates (though unlikely with our ID strategy)
         const newImages = images.filter(img => {
-          if (STATE.loadedImages.has(img.id)) {
+          if (STATE.loadedImageIds.has(img.id)) {
             return false;
           }
-          STATE.loadedImages.add(img.id);
+          STATE.loadedImageIds.add(img.id);
           return true;
         });
 
-        // Create DOM elements using DocumentFragment for performance
         const fragment = document.createDocumentFragment();
         newImages.forEach(imageData => {
-          const element = createImageElement(imageData);
+          const element = CatAPI.buildImageElement(imageData);
           fragment.appendChild(element);
         });
 
-        // Append all images at once
         const container = document.getElementById('image-container');
         container.appendChild(fragment);
 
-        // Mark initial load as complete
+        STATE.totalLoaded += newImages.length;
+
         if (STATE.isInitialLoad) {
           STATE.isInitialLoad = false;
         }
 
+        cleanupOldImages();
+
       } catch (error) {
         console.error('Failed to fetch cat images:', error);
         STATE.hasError = true;
+        showError(error);
       } finally {
         STATE.isLoading = false;
+        updateStats();
       }
     }
 
-    // ===== 4. SCROLL CONTROLLER & OBSERVER =====
-    /**
-     * Handles intersection events from the sentinel element
-     */
+    async function fetchWithRetry(fetchFn, retries = 0) {
+      try {
+        return await fetchFn();
+      } catch (error) {
+        if (retries < CONFIG.MAX_RETRIES) {
+          const delay = CONFIG.RETRY_DELAYS[retries];
+          console.log(`Retry ${retries + 1}/${CONFIG.MAX_RETRIES} in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return fetchWithRetry(fetchFn, retries + 1);
+        }
+        throw error;
+      }
+    }
+
+    // ===== 4. MEMORY MANAGEMENT =====
+    function cleanupOldImages() {
+      const container = document.getElementById('image-container');
+      const images = container.querySelectorAll('.image-wrapper');
+
+      if (images.length < 50) return;
+
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const threshold = scrollTop - CONFIG.CLEANUP_THRESHOLD;
+
+      let cleaned = 0;
+      images.forEach(wrapper => {
+        const rect = wrapper.getBoundingClientRect();
+        const absoluteTop = rect.top + scrollTop;
+
+        if (absoluteTop < threshold) {
+          const imageId = wrapper.dataset.imageId;
+          wrapper.remove();
+          STATE.loadedImageIds.delete(imageId);
+          cleaned++;
+        }
+      });
+
+      if (cleaned > 0) {
+        STATE.totalCleaned += cleaned;
+        updateStats();
+      }
+    }
+
+    // ===== 5. SCROLL CONTROLLER =====
     function handleIntersection(entries) {
       entries.forEach(entry => {
-        // When sentinel enters viewport (within rootMargin), load more
         if (entry.isIntersecting && !STATE.isLoading && !STATE.hasError) {
           fetchNextBatch();
         }
       });
     }
 
-    /**
-     * Initialize Intersection Observer
-     */
     function initScrollObserver() {
       const sentinel = document.getElementById('sentinel');
-
       const observer = new IntersectionObserver(handleIntersection, {
-        root: null, // Use viewport as root
-        rootMargin: CONFIG.SCROLL_THRESHOLD, // Trigger 200px before sentinel is visible
-        threshold: 0 // Fire as soon as any part enters the extended viewport
+        root: null,
+        rootMargin: CONFIG.SCROLL_THRESHOLD,
+        threshold: 0
       });
-
       observer.observe(sentinel);
-
       return observer;
     }
 
-    // ===== 5. INITIALIZATION =====
-    /**
-     * Initialize the application
-     */
-    async function init() {
-      // Start observing scroll position
-      initScrollObserver();
-
-      // Load initial batch immediately (before user scrolls)
-      await fetchNextBatch();
+    // ===== 6. UI UTILITIES =====
+    function showError(error) {
+      const loadingContainer = document.getElementById('loading-container');
+      if (loadingContainer) {
+        loadingContainer.innerHTML = `
+          <div class="error-message">
+            <h2>😿 Failed to load cats</h2>
+            <p>All cat image providers appear to be unavailable.</p>
+            <pre>${error.message}\n\nCheck the browser console for details.</pre>
+            <p style="margin-top: 15px;"><small>Try refreshing the page in a moment.</small></p>
+          </div>
+        `;
+        loadingContainer.style.display = 'block';
+      }
     }
 
-    // Start the app when DOM is ready
+    function updateStats() {
+      if (!CONFIG.DEV_MODE) return;
+
+      let statsEl = document.querySelector('.stats');
+      if (!statsEl) {
+        statsEl = document.createElement('div');
+        statsEl.className = 'stats';
+        document.body.appendChild(statsEl);
+      }
+
+      const activeImages = document.querySelectorAll('.image-wrapper').length;
+
+      statsEl.innerHTML = `
+        <div>📊 Stats</div>
+        <div>Provider: ${STATE.currentProvider || 'detecting...'}</div>
+        <div>Active: ${activeImages}</div>
+        <div>Loaded: ${STATE.totalLoaded}</div>
+        <div>Cleaned: ${STATE.totalCleaned}</div>
+        <div>Cache hits: ${STATE.cacheHits}</div>
+        <div>API calls: ${STATE.apiCalls}</div>
+        <div>Cached: ${CatAPI.cache.length}</div>
+      `;
+    }
+
+    // ===== 7. INITIALIZATION =====
+    async function init() {
+      console.log('🐱 Endless Cat Scroller v2');
+      console.log('Initializing...');
+
+      updateStats();
+      initScrollObserver();
+
+      try {
+        await fetchNextBatch();
+        console.log('✓ Initialization complete!');
+      } catch (error) {
+        console.error('✗ Initialization failed:', error);
+      }
+    }
+
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', init);
     } else {
