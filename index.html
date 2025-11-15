@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Endless Cat Scroller v2</title>
+  <style>
+    /* ===== GLOBAL STYLES ===== */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    /* ===== CONTAINER ===== */
+    #image-container {
+      max-width: 600px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* ===== IMAGE WRAPPER ===== */
+    .image-wrapper {
+      width: 100%;
+      background: white;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      position: relative;
+    }
+
+    .image-wrapper.loaded {
+      opacity: 1;
+    }
+
+    .image-wrapper img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    /* ===== TAG DISPLAY ===== */
+    .image-tags {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    .image-wrapper:hover .image-tags {
+      opacity: 1;
+    }
+
+    .tag {
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      backdrop-filter: blur(4px);
+    }
+
+    /* ===== SENTINEL ===== */
+    #sentinel {
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* ===== HEADER ===== */
+    header {
+      text-align: center;
+      color: white;
+      margin-bottom: 40px;
+      max-width: 600px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+    }
+
+    .subtitle {
+      font-size: 1.1rem;
+      opacity: 0.9;
+    }
+
+    /* ===== LOADING MESSAGE ===== */
+    .loading-message {
+      text-align: center;
+      color: white;
+      padding: 40px;
+      font-size: 1.2rem;
+      max-width: 600px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      backdrop-filter: blur(10px);
+    }
+
+    /* ===== ERROR MESSAGE ===== */
+    .error-message {
+      text-align: center;
+      color: white;
+      padding: 40px;
+      max-width: 600px;
+      margin: 0 auto;
+      background: rgba(255, 0, 0, 0.3);
+      border-radius: 12px;
+      backdrop-filter: blur(10px);
+    }
+
+    .error-message h2 {
+      margin-bottom: 15px;
+    }
+
+    .error-message pre {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 15px;
+      border-radius: 8px;
+      overflow-x: auto;
+      text-align: left;
+      font-size: 0.85rem;
+      margin-top: 15px;
+    }
+
+    /* ===== DEV MODE STATS ===== */
+    .stats {
+      position: fixed;
+      bottom: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 10px 15px;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      font-family: monospace;
+      z-index: 1000;
+      backdrop-filter: blur(10px);
+    }
+
+    /* Accessibility: ARIA attributes should be added to the .stats element in HTML:
+       <div class="stats" role="status" aria-live="polite" aria-atomic="true">...</div>
+    */
+    .stats div {
+      margin: 2px 0;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🐱 Endless Cat Scroller</h1>
+    <p class="subtitle">Scroll down for infinite cats!</p>
+  </header>
+
+  <div id="loading-container">
+    <div class="loading-message">
+      🐱 Loading cats...<br>
+      <small>This may take a moment...</small>
+    </div>
+  </div>
+
+  <div id="image-container">
+    <!-- Cat images dynamically inserted here -->
+  </div>
+  <div id="sentinel"></div>
+
+  <script>
+    // ===== 1. CONFIGURATION & STATE =====
+    const CONFIG = {
+      BATCH_SIZE: 5,
+      SCROLL_THRESHOLD: '200px',
+      MAX_RETRIES: 3,
+      RETRY_DELAYS: [2000, 4000, 8000],
+      CLEANUP_THRESHOLD: 2000,
+      CACHE_SIZE: 20,
+      DEV_MODE: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:'
+    };
+
+    const estimatedImagesPerViewport = Math.ceil(window.innerHeight / 400);
+    CONFIG.INITIAL_BATCH_SIZE = Math.max(estimatedImagesPerViewport * 2, 10);
+
+    const STATE = {
+      loadedImageIds: new Set(),
+      isLoading: false,
+      hasError: false,
+      isInitialLoad: true,
+      totalLoaded: 0,
+      totalCleaned: 0,
+      cacheHits: 0,
+      apiCalls: 0,
+      currentProvider: null
+    };
+
+    // ===== 2. API SERVICE (MULTI-PROVIDER) =====
+    const CatAPI = {
+      cache: [],
+      workingProvider: null, // Will be set to whichever works first
+      isRefilling: false,
+
+      /**
+       * Main fetch method - tries providers until one works
+       */
+      async fetch(count = 5) {
+        // Try cache first
+        if (this.cache.length >= count) {
+          const cached = this.cache.splice(0, count);
+          STATE.cacheHits += count;
+          this._log(`Served ${count} images from cache`);
+
+          if (this.cache.length < CONFIG.BATCH_SIZE) {
+            this._refillCache();
+          }
+
+          return cached;
+        }
+
+        // Cache miss - fetch from API
+        const images = await this._fetchFromAPI(count);
+        this._refillCache();
+        return images;
+      },
+
+      /**
+       * Try each provider until one works
+       */
+      async _fetchFromAPI(count) {
+        STATE.apiCalls++;
+
+        // If we found a working provider, use it
+        if (this.workingProvider) {
+          return await this.workingProvider(count);
+        }
+
+        // Try providers in order
+        const providers = [
+          { name: 'TheCatAPI', fn: this._fetchFromTheCatAPI.bind(this) },
+          { name: 'CATAAS (fallback)', fn: this._fetchFromCataasSimple.bind(this) }
+        ];
+
+        let lastError = null;
+
+        for (const provider of providers) {
+          try {
+            this._log(`Trying ${provider.name}...`);
+            const images = await provider.fn(count);
+
+            if (images && images.length > 0) {
+              this._log(`✓ ${provider.name} works!`, 'info');
+              this.workingProvider = provider.fn;
+              STATE.currentProvider = provider.name;
+              return images;
+            }
+          } catch (error) {
+            this._log(`✗ ${provider.name} failed: ${error.message}`, 'warn');
+            lastError = error;
+          }
+        }
+
+        throw lastError || new Error('All providers failed');
+      },
+
+      /**
+       * TheCatAPI.com implementation (FREE, no key required for basic use)
+       */
+      async _fetchFromTheCatAPI(count) {
+        const response = await fetch(`https://api.thecatapi.com/v1/images/search?limit=${Math.min(count, 100)}`);
+
+        if (!response.ok) {
+          if (response.status === 429) {
+            const error = new Error('Rate limit exceeded. Please try again later.');
+            error.isRateLimit = true;
+            throw error;
+          }
+          throw new Error(`TheCatAPI returned ${response.status}`);
+        }
+
+        const cats = await response.json();
+
+        return cats.map(cat => ({
+          id: cat.id,
+          tags: [],
+          baseUrl: cat.url,
+          srcset: `${cat.url} 1x`,
+          sizes: '(max-width: 600px) 100vw, 600px',
+          url: cat.url
+        }));
+      },
+
+      /**
+       * CATAAS simple fallback (direct image URLs, no JSON API)
+       */
+      async _fetchFromCataasSimple(count) {
+        const images = [];
+
+        for (let i = 0; i < count; i++) {
+          const timestamp = Date.now();
+          const random = Math.random().toString(36).substring(7);
+          const id = `cataas-${timestamp}-${random}-${i}`;
+
+          images.push({
+            id: id,
+            tags: [],
+            baseUrl: `https://cataas.com/cat?${timestamp}-${i}`,
+            srcset: `https://cataas.com/cat?${timestamp}-${i} 1x`,
+            sizes: '(max-width: 600px) 100vw, 600px',
+            url: `https://cataas.com/cat?${timestamp}-${i}`
+          });
+        }
+
+        // Test if first image is accessible
+        try {
+          const testResponse = await fetch(images[0].url, { method: 'HEAD' });
+          if (!testResponse.ok) {
+            throw new Error('CATAAS images not accessible');
+          }
+        } catch (error) {
+          throw new Error('CATAAS service unavailable');
+        }
+
+        return images;
+      },
+
+      /**
+       * Refill cache in background
+       */
+      async _refillCache() {
+        if (this.cache.length >= CONFIG.CACHE_SIZE || !this.workingProvider || this.isRefilling) {
+          return;
+        }
+
+        this.isRefilling = true;
+        try {
+          const needed = CONFIG.CACHE_SIZE - this.cache.length;
+          const images = await this.workingProvider(needed);
+          this.cache.push(...images);
+          this._log(`Cache refilled: ${this.cache.length} cached`);
+        } catch (error) {
+          console.error('Failed to refill cache:', error);
+        } finally {
+          this.isRefilling = false;
+        }
+      },
+
+      /**
+       * Build image element
+       */
+      buildImageElement(imageData) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'image-wrapper';
+        wrapper.dataset.imageId = imageData.id;
+
+        const img = document.createElement('img');
+        img.src = imageData.url;
+        if (imageData.srcset) {
+          img.srcset = imageData.srcset;
+        }
+        if (imageData.sizes) {
+          img.sizes = imageData.sizes;
+        }
+        img.alt = `Cat ${imageData.tags.length > 0 ? 'tagged: ' + imageData.tags.join(', ') : ''}`;
+        img.loading = 'lazy';
+
+        img.addEventListener('load', () => {
+          wrapper.classList.add('loaded');
+        });
+
+        img.addEventListener('error', () => {
+          this._log(`Failed to load image: ${imageData.id}`, 'error');
+          wrapper.remove();
+        });
+
+        wrapper.appendChild(img);
+
+        if (imageData.tags && imageData.tags.length > 0) {
+          const tagsContainer = document.createElement('div');
+          tagsContainer.className = 'image-tags';
+
+          imageData.tags.slice(0, 3).forEach(tag => {
+            const tagEl = document.createElement('span');
+            tagEl.className = 'tag';
+            tagEl.textContent = tag;
+            tagsContainer.appendChild(tagEl);
+          });
+
+          wrapper.appendChild(tagsContainer);
+        }
+
+        return wrapper;
+      },
+
+      _log(message, level = 'info') {
+        if (CONFIG.DEV_MODE) {
+          console[level](`[CatAPI] ${message}`);
+        }
+      }
+    };
+
+    // ===== 3. IMAGE MANAGER =====
+    async function fetchNextBatch() {
+      if (STATE.isLoading || STATE.hasError) {
+        return;
+      }
+
+      STATE.isLoading = true;
+      updateStats();
+
+      // Hide loading message on first batch
+      if (STATE.isInitialLoad) {
+        const loadingContainer = document.getElementById('loading-container');
+        if (loadingContainer) {
+          loadingContainer.style.display = 'none';
+        }
+      }
+
+      try {
+        const batchSize = STATE.isInitialLoad ? CONFIG.INITIAL_BATCH_SIZE : CONFIG.BATCH_SIZE;
+        const images = await fetchWithRetry(() => CatAPI.fetch(batchSize));
+
+        const newImages = images.filter(img => {
+          if (STATE.loadedImageIds.has(img.id)) {
+            return false;
+          }
+          STATE.loadedImageIds.add(img.id);
+          return true;
+        });
+
+        const fragment = document.createDocumentFragment();
+        newImages.forEach(imageData => {
+          const element = CatAPI.buildImageElement(imageData);
+          fragment.appendChild(element);
+        });
+
+        const container = document.getElementById('image-container');
+        container.appendChild(fragment);
+
+        STATE.totalLoaded += newImages.length;
+
+        if (STATE.isInitialLoad) {
+          STATE.isInitialLoad = false;
+        }
+
+        cleanupOldImages();
+
+      } catch (error) {
+        console.error('Failed to fetch cat images:', error);
+        STATE.hasError = true;
+        showError(error);
+      } finally {
+        STATE.isLoading = false;
+        updateStats();
+      }
+    }
+
+    async function fetchWithRetry(fetchFn, retries = 0) {
+      try {
+        return await fetchFn();
+      } catch (error) {
+        // Don't retry on rate limits - it won't help
+        if (error.isRateLimit) {
+          throw error;
+        }
+
+        if (retries < CONFIG.MAX_RETRIES) {
+          const delay = CONFIG.RETRY_DELAYS[retries];
+          console.log(`Retry ${retries + 1}/${CONFIG.MAX_RETRIES} in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return fetchWithRetry(fetchFn, retries + 1);
+        }
+        throw error;
+      }
+    }
+
+    // ===== 4. MEMORY MANAGEMENT =====
+    function cleanupOldImages() {
+      const container = document.getElementById('image-container');
+      const images = container.querySelectorAll('.image-wrapper');
+
+      if (images.length < 50) return;
+
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const threshold = scrollTop - CONFIG.CLEANUP_THRESHOLD;
+
+      let cleaned = 0;
+      images.forEach(wrapper => {
+        const rect = wrapper.getBoundingClientRect();
+        const absoluteTop = rect.top + scrollTop;
+
+        if (absoluteTop < threshold) {
+          const imageId = wrapper.dataset.imageId;
+          wrapper.remove();
+          STATE.loadedImageIds.delete(imageId);
+          cleaned++;
+        }
+      });
+
+      if (cleaned > 0) {
+        STATE.totalCleaned += cleaned;
+        updateStats();
+      }
+    }
+
+    // ===== 5. SCROLL CONTROLLER =====
+    function handleIntersection(entries) {
+      entries.forEach(entry => {
+        if (entry.isIntersecting && !STATE.isLoading && !STATE.hasError) {
+          fetchNextBatch();
+        }
+      });
+    }
+
+    function initScrollObserver() {
+      const sentinel = document.getElementById('sentinel');
+      const observer = new IntersectionObserver(handleIntersection, {
+        root: null,
+        rootMargin: CONFIG.SCROLL_THRESHOLD,
+        threshold: 0
+      });
+      observer.observe(sentinel);
+      return observer;
+    }
+
+    // ===== 6. UI UTILITIES =====
+    function showError(error) {
+      const loadingContainer = document.getElementById('loading-container');
+      if (loadingContainer) {
+        // Check if this is a rate limit error
+        const isRateLimit = error.isRateLimit || error.message.toLowerCase().includes('rate limit');
+
+        if (isRateLimit) {
+          loadingContainer.innerHTML = `
+            <div class="error-message">
+              <h2>⏰ Rate Limit Reached</h2>
+              <p>You've hit the API rate limit for cat images.</p>
+              <p style="margin-top: 15px;">Please wait a bit and try again later.</p>
+              <p style="margin-top: 10px;"><small>Rate limits typically reset within an hour.</small></p>
+            </div>
+          `;
+        } else {
+          loadingContainer.innerHTML = `
+            <div class="error-message">
+              <h2>😿 Failed to load cats</h2>
+              <p>All cat image providers appear to be unavailable.</p>
+              <pre>${error.message.replace(/</g, '&lt;').replace(/>/g, '&gt;')}\n\nCheck the browser console for details.</pre>
+              <p style="margin-top: 15px;"><small>Try refreshing the page in a moment.</small></p>
+            </div>
+          `;
+        }
+
+        loadingContainer.style.display = 'block';
+      }
+    }
+
+    function updateStats() {
+      if (!CONFIG.DEV_MODE) return;
+
+      let statsEl = document.querySelector('.stats');
+      if (!statsEl) {
+        statsEl = document.createElement('div');
+        statsEl.className = 'stats';
+        document.body.appendChild(statsEl);
+      }
+
+      const activeImages = document.querySelectorAll('.image-wrapper').length;
+
+      statsEl.innerHTML = `
+        <div>📊 Stats</div>
+        <div>Provider: ${STATE.currentProvider || 'detecting...'}</div>
+        <div>Active: ${activeImages}</div>
+        <div>Loaded: ${STATE.totalLoaded}</div>
+        <div>Cleaned: ${STATE.totalCleaned}</div>
+        <div>Cache hits: ${STATE.cacheHits}</div>
+        <div>API calls: ${STATE.apiCalls}</div>
+        <div>Cached: ${CatAPI.cache.length}</div>
+      `;
+    }
+
+    // ===== 7. INITIALIZATION =====
+    async function init() {
+      console.log('🐱 Endless Cat Scroller v2');
+      console.log('Initializing...');
+
+      updateStats();
+      initScrollObserver();
+
+      try {
+        await fetchNextBatch();
+        console.log('✓ Initialization complete!');
+      } catch (error) {
+        console.error('✗ Initialization failed:', error);
+      }
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+  </script>
+</body>
+</html>
