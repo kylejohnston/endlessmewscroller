@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>API Test</title>
+</head>
+<body>
+  <h1>Testing cataas.com API</h1>
+  <div id="output"></div>
+  <script>
+    const output = document.getElementById('output');
+
+    output.innerHTML = '<p>Starting test...</p>';
+
+    // Test 1: Simple image URL
+    output.innerHTML += '<p>Test 1: Loading image from /cat endpoint</p>';
+    const img = document.createElement('img');
+    img.src = 'https://cataas.com/cat';
+    img.onload = () => {
+      output.innerHTML += '<p style="color: green;">✓ Image endpoint works!</p>';
+    };
+    img.onerror = () => {
+      output.innerHTML += '<p style="color: red;">✗ Image endpoint failed!</p>';
+    };
+    document.body.appendChild(img);
+
+    // Test 2: API endpoint
+    output.innerHTML += '<p>Test 2: Fetching from /api/cats endpoint</p>';
+    fetch('https://cataas.com/api/cats?limit=2')
+      .then(response => {
+        output.innerHTML += `<p>Response status: ${response.status}</p>`;
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        return response.json();
+      })
+      .then(data => {
+        output.innerHTML += `<p style="color: green;">✓ API works! Got ${data.length} cats</p>`;
+        output.innerHTML += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+      })
+      .catch(error => {
+        output.innerHTML += `<p style="color: red;">✗ API failed: ${error.message}</p>`;
+        console.error('API Error:', error);
+      });
+  </script>
+</body>
+</html>
