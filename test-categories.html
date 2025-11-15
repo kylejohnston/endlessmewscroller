@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>TheCatAPI Categories Test</title>
+  <style>
+    body {
+      font-family: monospace;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    #output {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    pre {
+      background: #f0f0f0;
+      padding: 10px;
+      border-radius: 4px;
+      overflow-x: auto;
+    }
+    .category {
+      margin: 10px 0;
+      padding: 10px;
+      background: #e8f4f8;
+      border-left: 4px solid #0084ff;
+    }
+  </style>
+</head>
+<body>
+  <h1>TheCatAPI Categories Explorer</h1>
+  <div id="output">Loading...</div>
+
+  <script>
+    const output = document.getElementById('output');
+
+    async function testCategories() {
+      output.innerHTML = '<p>Fetching categories...</p>';
+
+      try {
+        // Test 1: Get all categories
+        const categoriesResponse = await fetch('https://api.thecatapi.com/v1/categories');
+
+        if (!categoriesResponse.ok) {
+          throw new Error(`Categories endpoint returned ${categoriesResponse.status}`);
+        }
+
+        const categories = await categoriesResponse.json();
+
+        output.innerHTML = `
+          <h2>Available Categories (${categories.length} total)</h2>
+          ${categories.map(cat => `
+            <div class="category">
+              <strong>ID: ${cat.id}</strong> - ${cat.name}
+            </div>
+          `).join('')}
+
+          <h2>Raw JSON:</h2>
+          <pre>${JSON.stringify(categories, null, 2)}</pre>
+
+          <h2>Test a Category:</h2>
+          <p>Example: Get images with category ID 1 (${categories[0]?.name || 'unknown'})</p>
+        `;
+
+        // Test 2: Try to get images with first category
+        if (categories.length > 0) {
+          const testCategoryId = categories[0].id;
+          const imagesResponse = await fetch(`https://api.thecatapi.com/v1/images/search?limit=3&category_ids=${testCategoryId}`);
+          const images = await imagesResponse.json();
+
+          output.innerHTML += `
+            <h3>Sample images from category "${categories[0].name}" (ID: ${testCategoryId}):</h3>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+              ${images.map(img => `
+                <img src="${img.url}" style="width: 200px; height: auto; border-radius: 8px;">
+              `).join('')}
+            </div>
+          `;
+        }
+
+      } catch (error) {
+        output.innerHTML = `
+          <h2 style="color: red;">Error</h2>
+          <p>${error.message}</p>
+          <pre>${error.stack}</pre>
+        `;
+        console.error('Error:', error);
+      }
+    }
+
+    testCategories();
+  </script>
+</body>
+</html>
