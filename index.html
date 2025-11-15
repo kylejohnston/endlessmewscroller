@@ -212,6 +212,7 @@
     const CatAPI = {
       cache: [],
       workingProvider: null, // Will be set to whichever works first
+      isRefilling: false, // Prevent concurrent cache refills
 
       /**
        * Main fetch method - tries providers until one works
@@ -340,10 +341,11 @@
        * Refill cache in background
        */
       async _refillCache() {
-        if (this.cache.length >= CONFIG.CACHE_SIZE || !this.workingProvider) {
+        if (this.cache.length >= CONFIG.CACHE_SIZE || !this.workingProvider || this.isRefilling) {
           return;
         }
 
+        this.isRefilling = true;
         try {
           const needed = CONFIG.CACHE_SIZE - this.cache.length;
           const images = await this.workingProvider(needed);
@@ -351,6 +353,8 @@
           this._log(`Cache refilled: ${this.cache.length} cached`);
         } catch (error) {
           console.error('Failed to refill cache:', error);
+        } finally {
+          this.isRefilling = false;
         }
       },
 
