@@ -158,6 +158,9 @@
       backdrop-filter: blur(10px);
     }
 
+    /* Accessibility: ARIA attributes should be added to the .stats element in HTML:
+       <div class="stats" role="status" aria-live="polite" aria-atomic="true">...</div>
+    */
     .stats div {
       margin: 2px 0;
     }
@@ -212,7 +215,7 @@
     const CatAPI = {
       cache: [],
       workingProvider: null, // Will be set to whichever works first
-      isRefilling: false, // Prevent concurrent cache refills
+      isRefilling: false,
 
       /**
        * Main fetch method - tries providers until one works
