@@ -279,7 +279,7 @@
        * TheCatAPI.com implementation (FREE, no key required for basic use)
        */
       async _fetchFromTheCatAPI(count) {
-        const response = await fetch(`https://api.thecatapi.com/v1/images/search?limit=${count}`);
+        const response = await fetch(`https://api.thecatapi.com/v1/images/search?limit=${Math.min(count, 100)}`);
 
         if (!response.ok) {
           if (response.status === 429) {
