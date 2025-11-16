@@ -187,8 +187,8 @@
   <script>
     // ===== 1. CONFIGURATION & STATE =====
     const CONFIG = {
-      // TheCatAPI.com API Key - Replace 'YOUR_API_KEY' with your actual key from the welcome email
-      CAT_API_KEY: 'YOUR_API_KEY_HERE',
+      // API endpoint - uses Cloudflare Pages Function to keep API key secure
+      API_ENDPOINT: '/api/cats',
       BATCH_SIZE: 5,
       SCROLL_THRESHOLD: '200px',
       MAX_RETRIES: 3,
@@ -249,18 +249,12 @@
       },
 
       /**
-       * TheCatAPI.com implementation
-       * Requires API key for more than 10 images (set in CONFIG.CAT_API_KEY)
+       * Fetch cat images via Cloudflare Pages Function
+       * The function proxies requests to TheCatAPI with the API key stored securely
        */
       async _fetchFromTheCatAPI(count) {
-        const headers = {};
-        if (CONFIG.CAT_API_KEY && CONFIG.CAT_API_KEY !== 'YOUR_API_KEY') {
-          headers['x-api-key'] = CONFIG.CAT_API_KEY;
-        }
-
         const response = await fetch(
-          `https://api.thecatapi.com/v1/images/search?limit=${Math.min(count, 100)}`,
-          { headers }
+          `${CONFIG.API_ENDPOINT}?limit=${Math.min(count, 100)}`
         );
 
         if (!response.ok) {
@@ -269,7 +263,7 @@
             error.isRateLimit = true;
             throw error;
           }
-          throw new Error(`TheCatAPI returned ${response.status}`);
+          throw new Error(`API returned ${response.status}`);
         }
 
         const cats = await response.json();
