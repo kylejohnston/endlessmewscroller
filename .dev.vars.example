@@ -1,0 +1,4 @@
+# Cloudflare Pages local development environment variables
+# Copy this file to .dev.vars and fill in your actual API key
+
+CAT_API_KEY=your-api-key-here
