@@ -187,6 +187,8 @@
   <script>
     // ===== 1. CONFIGURATION & STATE =====
     const CONFIG = {
+      // TheCatAPI.com API Key - Replace 'YOUR_API_KEY' with your actual key from the welcome email
+      CAT_API_KEY: 'YOUR_API_KEY',
       BATCH_SIZE: 5,
       SCROLL_THRESHOLD: '200px',
       MAX_RETRIES: 3,
@@ -207,18 +209,16 @@
       totalLoaded: 0,
       totalCleaned: 0,
       cacheHits: 0,
-      apiCalls: 0,
-      currentProvider: null
+      apiCalls: 0
     };
 
-    // ===== 2. API SERVICE (MULTI-PROVIDER) =====
+    // ===== 2. API SERVICE =====
     const CatAPI = {
       cache: [],
-      workingProvider: null, // Will be set to whichever works first
       isRefilling: false,
 
       /**
-       * Main fetch method - tries providers until one works
+       * Main fetch method - uses cache when available
        */
       async fetch(count = 5) {
         // Try cache first
@@ -241,49 +241,27 @@
       },
 
       /**
-       * Try each provider until one works
+       * Fetch from TheCatAPI
        */
       async _fetchFromAPI(count) {
         STATE.apiCalls++;
-
-        // If we found a working provider, use it
-        if (this.workingProvider) {
-          return await this.workingProvider(count);
-        }
-
-        // Try providers in order
-        const providers = [
-          { name: 'TheCatAPI', fn: this._fetchFromTheCatAPI.bind(this) },
-          { name: 'CATAAS (fallback)', fn: this._fetchFromCataasSimple.bind(this) }
-        ];
-
-        let lastError = null;
-
-        for (const provider of providers) {
-          try {
-            this._log(`Trying ${provider.name}...`);
-            const images = await provider.fn(count);
-
-            if (images && images.length > 0) {
-              this._log(`✓ ${provider.name} works!`, 'info');
-              this.workingProvider = provider.fn;
-              STATE.currentProvider = provider.name;
-              return images;
-            }
-          } catch (error) {
-            this._log(`✗ ${provider.name} failed: ${error.message}`, 'warn');
-            lastError = error;
-          }
-        }
-
-        throw lastError || new Error('All providers failed');
+        return await this._fetchFromTheCatAPI(count);
       },
 
       /**
-       * TheCatAPI.com implementation (FREE, no key required for basic use)
+       * TheCatAPI.com implementation
+       * Requires API key for more than 10 images (set in CONFIG.CAT_API_KEY)
        */
       async _fetchFromTheCatAPI(count) {
-        const response = await fetch(`https://api.thecatapi.com/v1/images/search?limit=${Math.min(count, 100)}`);
+        const headers = {};
+        if (CONFIG.CAT_API_KEY && CONFIG.CAT_API_KEY !== 'YOUR_API_KEY') {
+          headers['x-api-key'] = CONFIG.CAT_API_KEY;
+        }
+
+        const response = await fetch(
+          `https://api.thecatapi.com/v1/images/search?limit=${Math.min(count, 100)}`,
+          { headers }
+        );
 
         if (!response.ok) {
           if (response.status === 429) {
@@ -299,59 +277,22 @@
         return cats.map(cat => ({
           id: cat.id,
           tags: [],
-          baseUrl: cat.url,
-          srcset: `${cat.url} 1x`,
-          sizes: '(max-width: 600px) 100vw, 600px',
           url: cat.url
         }));
-      },
-
-      /**
-       * CATAAS simple fallback (direct image URLs, no JSON API)
-       */
-      async _fetchFromCataasSimple(count) {
-        const images = [];
-
-        for (let i = 0; i < count; i++) {
-          const timestamp = Date.now();
-          const random = Math.random().toString(36).substring(7);
-          const id = `cataas-${timestamp}-${random}-${i}`;
-
-          images.push({
-            id: id,
-            tags: [],
-            baseUrl: `https://cataas.com/cat?${timestamp}-${i}`,
-            srcset: `https://cataas.com/cat?${timestamp}-${i} 1x`,
-            sizes: '(max-width: 600px) 100vw, 600px',
-            url: `https://cataas.com/cat?${timestamp}-${i}`
-          });
-        }
-
-        // Test if first image is accessible
-        try {
-          const testResponse = await fetch(images[0].url, { method: 'HEAD' });
-          if (!testResponse.ok) {
-            throw new Error('CATAAS images not accessible');
-          }
-        } catch (error) {
-          throw new Error('CATAAS service unavailable');
-        }
-
-        return images;
       },
 
       /**
        * Refill cache in background
        */
       async _refillCache() {
-        if (this.cache.length >= CONFIG.CACHE_SIZE || !this.workingProvider || this.isRefilling) {
+        if (this.cache.length >= CONFIG.CACHE_SIZE || this.isRefilling) {
           return;
         }
 
         this.isRefilling = true;
         try {
           const needed = CONFIG.CACHE_SIZE - this.cache.length;
-          const images = await this.workingProvider(needed);
+          const images = await this._fetchFromTheCatAPI(needed);
           this.cache.push(...images);
           this._log(`Cache refilled: ${this.cache.length} cached`);
         } catch (error) {
@@ -371,12 +312,6 @@
 
         const img = document.createElement('img');
         img.src = imageData.url;
-        if (imageData.srcset) {
-          img.srcset = imageData.srcset;
-        }
-        if (imageData.sizes) {
-          img.sizes = imageData.sizes;
-        }
         img.alt = `Cat ${imageData.tags.length > 0 ? 'tagged: ' + imageData.tags.join(', ') : ''}`;
         img.loading = 'lazy';
 
@@ -559,7 +494,7 @@
           loadingContainer.innerHTML = `
             <div class="error-message">
               <h2>😿 Failed to load cats</h2>
-              <p>All cat image providers appear to be unavailable.</p>
+              <p>Unable to fetch cat images from TheCatAPI.</p>
               <pre>${error.message.replace(/</g, '&lt;').replace(/>/g, '&gt;')}\n\nCheck the browser console for details.</pre>
               <p style="margin-top: 15px;"><small>Try refreshing the page in a moment.</small></p>
             </div>
@@ -583,8 +518,7 @@
       const activeImages = document.querySelectorAll('.image-wrapper').length;
 
       statsEl.innerHTML = `
-        <div>📊 Stats</div>
-        <div>Provider: ${STATE.currentProvider || 'detecting...'}</div>
+        <div>📊 Stats (TheCatAPI)</div>
         <div>Active: ${activeImages}</div>
         <div>Loaded: ${STATE.totalLoaded}</div>
         <div>Cleaned: ${STATE.totalCleaned}</div>
