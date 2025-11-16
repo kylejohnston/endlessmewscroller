@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Endless Cat Scroller</title>
+  <meta name="description" content="When you need a break from doomscrolling, scroll cats!">
+  <title>Endless Mew Scroller 😸</title>
   <style>
     /* ===== GLOBAL STYLES ===== */
     * {
@@ -14,10 +15,13 @@
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: linear-gradient(135deg, #330066 0%, #7744AA 100%);
       min-height: 100vh;
       padding: 20px;
     }
+
+    a:link, a:visited { color: #0099CC; }
+    a:hover, a:active { color: #007AA3; text-decoration: none; }
 
     /* ===== CONTAINER ===== */
     #image-container {
@@ -50,31 +54,6 @@
       display: block;
     }
 
-    /* ===== TAG DISPLAY ===== */
-    .image-tags {
-      position: absolute;
-      bottom: 10px;
-      left: 10px;
-      display: flex;
-      gap: 5px;
-      flex-wrap: wrap;
-      opacity: 0;
-      transition: opacity 0.2s ease;
-    }
-
-    .image-wrapper:hover .image-tags {
-      opacity: 1;
-    }
-
-    .tag {
-      background: rgba(0, 0, 0, 0.7);
-      color: white;
-      padding: 4px 8px;
-      border-radius: 4px;
-      font-size: 0.75rem;
-      backdrop-filter: blur(4px);
-    }
-
     /* ===== SENTINEL ===== */
     #sentinel {
       height: 1px;
@@ -95,13 +74,22 @@
     h1 {
       font-size: 2.5rem;
       font-weight: 700;
-      margin-bottom: 10px;
-      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+      margin-bottom: 4px;
+      text-wrap: balance;
     }
 
     .subtitle {
       font-size: 1.1rem;
-      opacity: 0.9;
+      text-wrap: balance;
+    }
+
+    button {
+        border-radius: 99px;
+        padding: 8px 16px;
+        border: none;
+        background: #fff;
+        margin-top: 1em;
+        cursor: pointer;
     }
 
     /* ===== LOADING MESSAGE ===== */
@@ -164,12 +152,52 @@
     .stats div {
       margin: 2px 0;
     }
+    .about {
+        padding: 24px;
+        border-radius: 8px;
+        border: 2px solid #F5EBFF;
+        background: rgba(255, 255, 255, 0.95);
+        text-align: center;
+        color: #121212;
+        backdrop-filter: blur(10px);
+        position: fixed;
+        top: 24dvh;
+        left: 50%;
+        width: calc(100vw - 32px);
+        max-width: 400px;
+        transition: opacity 0.3s ease-in-out, transform 0.3s ease-in-out, overlay 0.3s ease-in-out allow-discrete, display 0.3s ease-in-out allow-discrete;
+        box-shadow: 0px 8px 24px 0px #140029;
+    }
+    .about p {
+        margin-block: .5em;
+        line-height: 1.3;
+    }
+
+    .about:popover-open {
+        opacity: 1;
+        transform: translateX(-50%);
+    }
+
+    /* Starting style for popover animation */
+    @starting-style {
+        .about:popover-open {
+            opacity: 0;
+            transform: translate(-50%, 2rem);
+        }
+    }
+
+    /* Closing state */
+    .about:not(:popover-open) {
+        opacity: 0;
+        transform: translate(-50%, 2rem);
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>🐱 Endless Cat Scroller</h1>
-    <p class="subtitle">Scroll down for infinite cats!</p>
+    <h1>Endless Mew Scroller 😸</h1>
+    <p class="subtitle">When you need a break from doomscrolling, scroll cats!</p>
+    <button popovertarget="aboutPopover">About</button>
   </header>
 
   <div id="loading-container">
@@ -183,6 +211,12 @@
     <!-- Cat images dynamically inserted here -->
   </div>
   <div id="sentinel"></div>
+  <div id="aboutPopover" class="about" popover>
+    <p><strong>&ldquo;All the mews that's fit to view&rdquo;</strong></p>
+    <p>Made with <a href="https://thecatapi.com/">TheCatAPI</a> by <a href="https://github.com/kylejohnston/endlessmewscroller">Kyle</a>.</p>
+    <p><a href="https://www.petfinder.com/animal-shelters-and-rescues/search/">Support your local shelter!</a></p>
+  </div>
+
 
   <script>
     // ===== 1. CONFIGURATION & STATE =====
@@ -285,7 +319,6 @@
 
         return cats.map(cat => ({
           id: cat.id,
-          tags: [],
           url: cat.url
         }));
       },
@@ -325,7 +358,7 @@
 
         const img = document.createElement('img');
         img.src = imageData.url;
-        img.alt = `Cat ${imageData.tags.length > 0 ? 'tagged: ' + imageData.tags.join(', ') : ''}`;
+        img.alt = 'Cat photo';
         img.loading = 'lazy';
 
         img.addEventListener('load', () => {
@@ -338,20 +371,6 @@
         });
 
         wrapper.appendChild(img);
-
-        if (imageData.tags && imageData.tags.length > 0) {
-          const tagsContainer = document.createElement('div');
-          tagsContainer.className = 'image-tags';
-
-          imageData.tags.slice(0, 3).forEach(tag => {
-            const tagEl = document.createElement('span');
-            tagEl.className = 'tag';
-            tagEl.textContent = tag;
-            tagsContainer.appendChild(tagEl);
-          });
-
-          wrapper.appendChild(tagsContainer);
-        }
 
         return wrapper;
       },
