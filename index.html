@@ -195,7 +195,11 @@
       RETRY_DELAYS: [2000, 4000, 8000],
       CLEANUP_THRESHOLD: 2000,
       CACHE_SIZE: 20,
-      DEV_MODE: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:'
+      // Enable dev mode on localhost, file://, or if ?debug=1 is in URL
+      DEV_MODE: window.location.hostname === 'localhost' ||
+                window.location.hostname === '127.0.0.1' ||
+                window.location.protocol === 'file:' ||
+                new URLSearchParams(window.location.search).get('debug') === '1'
     };
 
     const estimatedImagesPerViewport = Math.ceil(window.innerHeight / 400);
@@ -234,9 +238,14 @@
           return cached;
         }
 
-        // Cache miss - fetch from API
+        // Cache miss - fetch from API and start refilling cache
         const images = await this._fetchFromAPI(count);
-        this._refillCache();
+
+        // Refill cache asynchronously (don't await)
+        this._refillCache().catch(err => {
+          console.error('Background cache refill failed:', err);
+        });
+
         return images;
       },
 
@@ -253,20 +262,26 @@
        * The function proxies requests to TheCatAPI with the API key stored securely
        */
       async _fetchFromTheCatAPI(count) {
+        this._log(`Fetching ${count} images from API`);
+
         const response = await fetch(
           `${CONFIG.API_ENDPOINT}?limit=${Math.min(count, 100)}`
         );
 
         if (!response.ok) {
+          const errorText = await response.text().catch(() => 'Unable to read error response');
+          console.error(`API error (${response.status}):`, errorText);
+
           if (response.status === 429) {
             const error = new Error('Rate limit exceeded. Please try again later.');
             error.isRateLimit = true;
             throw error;
           }
-          throw new Error(`API returned ${response.status}`);
+          throw new Error(`API returned ${response.status}: ${errorText}`);
         }
 
         const cats = await response.json();
+        this._log(`Received ${cats.length} images from API`);
 
         return cats.map(cat => ({
           id: cat.id,
@@ -280,10 +295,12 @@
        */
       async _refillCache() {
         if (this.cache.length >= CONFIG.CACHE_SIZE || this.isRefilling) {
+          this._log(`Skipping cache refill (length: ${this.cache.length}, isRefilling: ${this.isRefilling})`);
           return;
         }
 
         this.isRefilling = true;
+        this._log('Starting cache refill...');
         try {
           const needed = CONFIG.CACHE_SIZE - this.cache.length;
           const images = await this._fetchFromTheCatAPI(needed);
@@ -291,8 +308,10 @@
           this._log(`Cache refilled: ${this.cache.length} cached`);
         } catch (error) {
           console.error('Failed to refill cache:', error);
+          this._log(`Cache refill failed: ${error.message}`, 'error');
         } finally {
           this.isRefilling = false;
+          this._log(`Cache refill complete (isRefilling reset to false)`);
         }
       },
 
@@ -347,7 +366,14 @@
     // ===== 3. IMAGE MANAGER =====
     async function fetchNextBatch() {
       if (STATE.isLoading || STATE.hasError) {
+        if (CONFIG.DEV_MODE) {
+          console.log('[fetchNextBatch] Skipped - isLoading:', STATE.isLoading, 'hasError:', STATE.hasError);
+        }
         return;
+      }
+
+      if (CONFIG.DEV_MODE) {
+        console.log('[fetchNextBatch] Starting batch fetch...');
       }
 
       STATE.isLoading = true;
@@ -384,6 +410,10 @@
 
         STATE.totalLoaded += newImages.length;
 
+        if (CONFIG.DEV_MODE) {
+          console.log(`[fetchNextBatch] Added ${newImages.length} new images (total: ${STATE.totalLoaded})`);
+        }
+
         if (STATE.isInitialLoad) {
           STATE.isInitialLoad = false;
         }
@@ -397,6 +427,10 @@
       } finally {
         STATE.isLoading = false;
         updateStats();
+
+        if (CONFIG.DEV_MODE) {
+          console.log('[fetchNextBatch] Batch complete - isLoading reset to false');
+        }
       }
     }
 
